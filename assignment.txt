@@ -1,0 +1,38 @@
+Úkolem této bodované programovací úlohy je naimplementovat algoritmy, které vám umožní nalezení minimálního deterministického konečného automatu, který přijímá průnik, resp. sjednocení jazyků zadaných dvojicí končených automatů. Cílem je tedy implementovat sadu dvou funkcí v jazyce C++ se signaturami
+
+DFA unify(const NFA&, const NFA&); a
+DFA intersect(const NFA&, const NFA&); .
+Obě tyto funkce musí vracet minimální automat pro daný jazyk.
+
+Vstupem, resp. výstupem, algoritmů jsou konečné automaty v podobě struktur NFA, resp. DFA. První struktura, NFA, reprezentuje nedeterministický konečný automat (pro některé přechodové funkce ho ale můžeme prohlásit za deterministický). Druhá struktura, DFA, reprezentuje pouze deterministický konečný automat. Tyto struktury jsou jen jednoduché datové struktury, které udržují data reprezentující automat a neprovádí žádné kontroly validity obsahu. Správná inicializace a naplnění obsahem je starost toho, kdo je vytváří.
+
+Tyto struktury jsou definovány v testovacím prostředí (ve svém úkolu je tedy nedefinujte), viz ukázka kódu v přiloženém vzorovém souboru. Pro zjednodušení jsou stavy definovány jako hodnoty typu unsigned a symboly abecedy jako hodnoty typu uint8_t.
+
+Je zaručeno, že na vstupu funkcí unify a intersect budou validní nedeterministické konečné automaty. Budou splňovat následující vlastnosti:
+
+Množiny stavů (NFA::m_States) a symbolů abecedy (NFA::m_Alphabet) budou neprázdné.
+Počáteční, resp. koncové stavy (NFA::m_InitialState, resp. NFA::m_FinalStates) budou prvky množiny stavů NFA::m_States.
+Pokud nebude pro nějaký stav q a symbol abecedy a definovaný přechod v automatu, pak v NFA::m_Transitions nebude klíč (q, a) vůbec existovat.
+V přechodové tabulce NFA::m_Transitions se vyskytují také jen takové symboly a stavy, které jsou specifikovány v množině symbolů abecedy a v množině stavů.
+Porovnání automatů s referenčním výsledkem se provádí přes testování izomorfismu přechodových funkcí minimálních deterministických konečných automatů a množin koncových stavů. Váš výstup se tedy může of referenčního lišit maximálně v pojmenování stavů, jinak bude vyhodnocen jako nesprávný. Výsledný DFA musí také splňovat podmínky definice automatu, tedy musí platit to samé co výše pro NFA (až na zřejmé změny kvůli rozdílným definicím přechodové funkce).
+
+Pokud je výsledkem automat přijímající prázdný jazyk, je potřeba odevzdat jednostavový automat s nezměněnou abecedou, prázdnou množinou přechodů i koncových stavů (viz jeden z testů ukázkového souboru). Může se také stát, že oba automaty na vstupu budou nad rozdílnou abecedou. Výsledek pak očekáváme automat nad sjednocením těchto abeced.
+
+Odevzdávejte zdrojový soubor, který obsahuje implementaci požadovaných funkcí pro danou úlohu. Do zdrojového souboru přidejte i další Vaše podpůrné funkce či datové struktury. Funkce budou volané z testovacího prostředí, je proto důležité přesně dodržet zadané rozhraní funkce. Nedodržení povede k chybě při kompilaci. Za základ pro implementaci použijte kód z ukázky níže. V kódu chybí vyplnit implementace obou zmíněných funkcí (a případné další podpůrné funkce či datové struktury). Ukázka obsahuje testovací funkci main, uvedené hodnoty jsou použité při základním testu. Všimněte si, že vkládání hlavičkových souborů, struktur DFA a NFA a funkce main jsou zabalené v bloku podmíněného překladu (#ifdef/#endif). Ponechte definice těchto struktur, include direktivy preprocesoru i funkci main v blocích podmíněného překladu i v odevzdávaném zdrojovém souboru, jinak Váš program nepůjde zkompilovat.
+
+Podmíněný překlad Vám zjednoduší práci. Při kompilaci na Vašem počítači můžete program normálně spouštět a testovat. Při kompilaci na Progtestu však vše uvnitř těchto bloků "zmizí", tedy nebude kolidovat s hlavičkovými soubory, již definovanými strukturami či funkcí main testovacího prostředí.
+
+Pro základ implementace můžete využít soubor ke stažení níže v sekci Vzorová data. Tento soubor obsahuje také několik základních testů, mějte však na paměti, že výsledky Vaší implementace se mohou lišit v pojmenování stavů. Testy jsou nastaveny podle výsledků, které dává jedno z referenčních řešení. Možná si je tedy budete muset upravit.
+
+Váš program bude spouštěn v omezeném testovacím prostředí. Je omezen dobou běhu (limit je vidět v logu referenčního řešení) a dále je omezena i velikost dostupné paměti.
+
+Poznámky:
+Potřebné algoritmy pro tento úkol byly probrány v přednáškách a na cvičení.
+Aby byl automat minimální, musí splňovat určité vlastnosti.
+Mějte na paměti, že vstupy jsou různé validní automaty podle definice z přednášky. Koncový stav může být například jen jeden a to v nedosažitelné části automatu (tedy jazyk automatu může být prázdný) nebo také nemusí být koncový žádný stav.
+Výstupem obou implementovaných funkcí musí být validní automat. Dejte pozor zejména na správné inicializace atributů DFA vzhledem k omezením výše.
+Časový limit je nastaven poměrně benevolentně. Měl by postačit i pro naivní implementaci algoritmů z přednášky. Ne všechny algoritmy jsou ale vhodné.
+Rozmyslete si dobře, který algoritmus sjednocení budete implementovat. Vhodným výběrem se může implementace úkolu značně zkrátit.
+Vzorová data jsou nastavena podle jednoho z referenčních řešení. Očíslování stavů je zvoleno v pořadí navštívení daného stavu algoritmem BFS spuštěného z počátečního stavu automatu. Expanze hran v přechodovém diagramu je provedena v lexikografickém pořadí abecedy automatu, tj. pokud expanduje stav q a existují přechody δ(q, b) = p a δ(q, a)=r, nejprve objevíme stav r.
+Algoritmus determinizace provedený podle přednášky vytváří automat se stavy, které splňují jisté vlastnosti. Můžete je využít pro zefektivnění vašeho programu.
+Nápovědy, které zobrazují automaty tabulkou, jsou vypsány ve formátu pro nástroj ALT. Vizte dokumentaci formátu
