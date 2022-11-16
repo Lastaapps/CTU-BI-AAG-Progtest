@@ -76,19 +76,7 @@ ostream& operator<<(ostream& out, const map<T1, T2>& map) {
     return out << "}";
 }
 
-void print(const DFA& dfa, ostream& out = cout) {
-    out <<
-        dfa.m_States << "\n" <<
-        dfa.m_Alphabet << "\n" <<
-        dfa.m_Transitions << "\n" <<
-        dfa.m_InitialState << "\n" <<
-        dfa.m_FinalStates << endl;
-}
-
 #endif
-
-using SetState = set<State>;
-using SetConfig = pair<SetState, Symbol>;
 
 /** Checks if two sets intersect, return true if yes */
 template<typename S>
@@ -110,15 +98,243 @@ bool checkIntersect(const set<S>& s1, const set<S>& s2) {
     return false;
 }
 
+template<typename Automat>
+set<Symbol> commonAlphabet(const Automat& aut1, const Automat& aut2) {
+    set<Symbol> alphabet;
+    merge(
+            aut1.m_Alphabet.begin(), aut1.m_Alphabet.end(), 
+            aut2.m_Alphabet.begin(), aut2.m_Alphabet.end(), 
+            inserter(alphabet, alphabet.begin())
+         ); 
+    return alphabet;
+}
+
+/** Creates a mapping for FromState -> State */
+template<typename FromConfig, typename FromState>
+map<FromState, State> nameStates(
+        const FromState& initial,
+        const map<FromConfig, FromState>& transitions
+        ) {
+    map<FromState, State> nameMaping;
+
+    // starts at 0
+    State nextStateName = 0;
+    set<FromState> visited = {initial};
+    queue<FromState> queue;
+    queue.push(initial);
+
+    // BFS
+    while (!queue.empty()) {
+        const State name = nextStateName++;
+        const FromState& state = queue.front();
+
+        // add to the final result
+        nameMaping.emplace(make_pair(state, name));
+
+        // adds other to queue in lexicographical order
+        auto itr = transitions.lower_bound({state, 0});
+        for (; itr != transitions.end() && get<0>(itr -> first) == state; ++itr) {
+            const FromState& targets = itr -> second;
+            if (visited.find(targets) == visited.end()) {
+                visited.emplace(state);
+                queue.emplace(targets);
+            }
+        }
+
+        queue.pop();
+    }
+    return nameMaping;
+}
+/**
+ * Renames nodes according to the previously generated mapping 
+ * and creates the finite notes set. Puts it all into the final DFA */
+DFA commonApplyNaming(
+        const DFA& dfa,
+        const map<Config, State>& transitions,
+        const map<State, State>& nameMaping
+        ) {
+
+    // states are just integers in [0, n>
+    set<State> newStates = {0}; // the initial state must be always presented
+    for (size_t i = 0; i < nameMaping.size(); ++i)
+        newStates.emplace(i);
+
+    map<Config, State> newTransitions;
+    set<State> newFinite;
+
+    for (const auto& transition : transitions) {
+        const auto& [setConfig, dest] = transition;
+        const auto [state, symbol] = setConfig;
+
+        if (nameMaping.count(state) == 0)
+            continue;
+
+        // extract names
+        const State name = nameMaping.at(state);
+        const Config key = Config{name, symbol};
+        const State value = nameMaping.at(dest);
+
+        // add to the final result
+        newTransitions.emplace(make_pair(key, value));
+
+        // checks if the state is final
+        if (dfa.m_FinalStates.count(state))
+            newFinite.emplace(name);
+    }
+
+    const DFA output = {
+        newStates,
+        dfa.m_Alphabet,
+        newTransitions,
+        0,
+        newFinite
+    };
+
+    return output;
+}
+
+DFA commonNaming(const DFA& dfa) {
+    const map<State, State> nameMaping = nameStates(dfa.m_InitialState, dfa.m_Transitions);
+    return commonApplyNaming(dfa, dfa.m_Transitions, nameMaping);
+}
+
+void print(const DFA& dfa, ostream& out = cout) {
+    out <<
+        dfa.m_States << "\n" <<
+        dfa.m_Alphabet << "\n" <<
+        dfa.m_Transitions << "\n" <<
+        dfa.m_InitialState << "\n" <<
+        dfa.m_FinalStates << endl;
+}
+void printCommon(const DFA& dfa, ostream& out = cout) {
+    const DFA aut = commonNaming(dfa);
+    print(aut);
+}
+
+
+// --- Minimization -----------------------------------------------------------
+
+DFA minimize(const DFA& dfa) {
+    return dfa;
+}
+
+
+// --- Parallel run -----------------------------------------------------------
+
+using DoubleState = tuple<State, State>;
+using DoubleConfig = tuple<DoubleState, Symbol>;
+
+map<DoubleConfig, DoubleState> parallelRunTransitions(const DFA& dfa1, const DFA& dfa2) {
+    const map<Config, State>& trans1 = dfa1.m_Transitions;
+    const map<Config, State>& trans2 = dfa2.m_Transitions;
+    const set<Symbol> alphabet = dfa1.m_Alphabet;
+
+    map<DoubleConfig, DoubleState> transitions;
+
+    queue<DoubleState> queue;
+    queue.push({dfa1.m_InitialState, dfa2.m_InitialState});
+    set<DoubleState> visited = {{dfa1.m_InitialState, dfa2.m_InitialState}};
+
+    while(!queue.empty()) {
+        const auto& state = queue.front();
+        const auto [state1, state2] = state;
+
+        auto itr1 = trans1.lower_bound({state1, 0});
+        auto itr2 = trans2.lower_bound({state2, 0});
+        // requires same alphabet and full automates
+        for (const Symbol symbol : alphabet) {
+            // next state
+            const DoubleState target = {itr1 -> second, itr2 -> second};
+
+            if (visited.find(target) == visited.end()) {
+                visited.emplace(target);
+                queue.push(target);
+            }
+
+            const DoubleConfig current = {state, symbol};
+            transitions.emplace(make_pair(current, target));
+
+            ++itr1; ++itr2;
+        }
+
+        queue.pop();
+    }
+    return transitions;
+}
+
+/**
+ * Renames nodes according to the previously generated mapping 
+ * and creates the finite notes set. Puts it all into the final DFA */
+DFA parallelRunApplyNaming(
+        const DFA& dfa1,
+        const DFA& dfa2,
+        const map<DoubleConfig, DoubleState>& transitions,
+        const map<DoubleState, State>& nameMaping,
+        const bool isIntersect
+        ) {
+    const set<State>& fin1 = dfa1.m_FinalStates;
+    const set<State>& fin2 = dfa2.m_FinalStates;
+
+    // states are just integers in [0, n>
+    set<State> newStates = {0}; // the initial state must be always presented
+    for (size_t i = 0; i < nameMaping.size(); ++i)
+        newStates.emplace(i);
+
+    map<Config, State> newTransitions;
+    set<State> newFinite;
+
+    for (const auto& transition : transitions) {
+        const auto& [setConfig, dest] = transition;
+        const auto [state, symbol] = setConfig;
+
+        // extract names
+        const State name = nameMaping.at(state);
+        const Config key = Config{name, symbol};
+        const State value = nameMaping.at(dest);
+
+        // add to the final result
+        newTransitions.emplace(make_pair(key, value));
+
+        // checks if the state is final
+        if (isIntersect) {
+            if (fin1.count(get<0>(state)) && fin2.count(get<1>(state)) )
+                newFinite.emplace(name);
+        } else {
+            if (fin1.count(get<0>(state)) || fin2.count(get<1>(state)) )
+                newFinite.emplace(name);
+        }
+    }
+
+    const DFA output = {
+        newStates,
+        dfa1.m_Alphabet,
+        newTransitions,
+        0,
+        newFinite
+    };
+
+    return output;
+}
+
+/** Performs the parallel run algorithm
+ * both automates must have the same alphabet
+ * both automates must be full */
+DFA parallelRun(const DFA& dfa1, const DFA& dfa2, const bool isIntersect) {
+    const map<DoubleConfig, DoubleState> transitions = parallelRunTransitions(dfa1, dfa2);
+    const map<DoubleState, State> nameMaping = nameStates({dfa1.m_InitialState, dfa2.m_InitialState}, transitions);
+    return parallelRunApplyNaming(dfa1, dfa2, transitions, nameMaping, isIntersect);
+}
+
+
 // --- Full automat -----------------------------------------------------------
 
-DFA makeFull(const DFA& dfa) {
+DFA makeFull(const DFA& dfa, const set<Symbol>& alphabet) {
     const State failState = dfa.m_States.size(); // last item + 1
     map<Config, State> transitions = dfa.m_Transitions;
     
     // exploiting that states are indexed from 0 to len - 1
-    for (size_t state = 0; state < failState; ++state) {
-        for (const Symbol symbol : dfa.m_Alphabet) {
+    for (State state = 0; state < failState; ++state) {
+        for (const Symbol symbol : alphabet) {
             const Config config = {state, symbol};
             if (transitions.find(config) == transitions.end()) {
                 transitions.emplace(make_pair(config, failState));
@@ -127,17 +343,17 @@ DFA makeFull(const DFA& dfa) {
     }
 
     // add transitions for the final state
-    for (const Symbol symbol : dfa.m_Alphabet) {
+    for (const Symbol symbol : alphabet) {
         const Config config = {failState, symbol};
         transitions.emplace(make_pair(config, failState));
     }
 
-    SetState newStates = dfa.m_States;
+    set<State> newStates = dfa.m_States;
     newStates.emplace(failState);
 
     return DFA{
         newStates,
-        dfa.m_Alphabet,
+        alphabet,
         transitions,
         dfa.m_InitialState,
         dfa.m_FinalStates
@@ -145,6 +361,9 @@ DFA makeFull(const DFA& dfa) {
 }
 
 // --- Determinization --------------------------------------------------------
+
+using SetState = set<State>;
+using SetConfig = tuple<SetState, Symbol>;
 
 map<SetConfig, SetState> determinizeTransitions(const NFA& nfa) {
     map<SetConfig, SetState> createdTransitions;
@@ -164,7 +383,7 @@ map<SetConfig, SetState> determinizeTransitions(const NFA& nfa) {
             // iterate over all the symbols for the original state
             auto itr = nfa.m_Transitions.lower_bound({state, 0});
 
-            for (; itr != nfa.m_Transitions.end() && itr -> first.first == state; ++itr) {
+            for (; itr != nfa.m_Transitions.end() && get<0>(itr -> first) == state; ++itr) {
                 const Symbol symbol = itr -> first.second;
                 const SetState& targets = itr -> second;
                 results[symbol].insert(targets.begin(), targets.end());
@@ -192,42 +411,6 @@ map<SetConfig, SetState> determinizeTransitions(const NFA& nfa) {
     return createdTransitions;
 }
 
-/** Creates a mapping for SetState -> State */
-map<SetState, State> determinizeNameStates(
-        const NFA& nfa,
-        const map<SetConfig, SetState>& transitions
-        ) {
-    map<SetState, State> nameMaping;
-
-    // starts at 0
-    State nextStateName = 0;
-    set<SetState> visited = {{nfa.m_InitialState}};
-    queue<SetState> queue;
-    queue.push({nfa.m_InitialState});
-
-    // BFS
-    while (!queue.empty()) {
-        const State name = nextStateName++;
-        const SetState& state = queue.front();
-
-        // add to the final result
-        nameMaping.emplace(make_pair(state, name));
-
-        // adds other to queue in lexicographical order
-        auto itr = transitions.lower_bound({state, 0});
-        for (; itr != transitions.end() && itr -> first.first == state; ++itr) {
-            const SetState& targets = itr -> second;
-            if (visited.find(targets) == visited.end()) {
-                visited.emplace(state);
-                queue.emplace(targets);
-            }
-        }
-
-        queue.pop();
-    }
-    return nameMaping;
-}
-
 /**
  * Renames nodes according to the previously generated mapping 
  * and creates the finite notes set. Puts it all into the final DFA */
@@ -238,7 +421,7 @@ DFA determinizeApplyNaming(
         ) {
 
     // states are just integers in [0, n>
-    set<State> newStates;
+    set<State> newStates = {0}; // the initial state must be always presented
     for (size_t i = 0; i < nameMaping.size(); ++i)
         newStates.emplace(i);
 
@@ -247,7 +430,7 @@ DFA determinizeApplyNaming(
 
     for (const auto& transition : transitions) {
         const auto& [setConfig, dest] = transition;
-        const auto& [state, symbol] = setConfig;
+        const auto [state, symbol] = setConfig;
 
         // extract names
         const State name = nameMaping.at(state);
@@ -275,13 +458,20 @@ DFA determinizeApplyNaming(
 
 /** Determinizes an automat */
 DFA determinize(const NFA& nfa) {
-    map<SetConfig, SetState> transitions = determinizeTransitions(nfa);
-    map<SetState, State> naming = determinizeNameStates(nfa, transitions);
+    const map<SetConfig, SetState> transitions = determinizeTransitions(nfa);
+    const map<SetState, State> naming = nameStates(SetState({nfa.m_InitialState}), transitions);
     return determinizeApplyNaming(nfa, transitions, naming);
 }
 
-DFA unify(const NFA& a, const NFA& b);
-DFA intersect(const NFA& a, const NFA& b);
+DFA handleProgtest(const NFA& nfa1, const NFA& nfa2, const bool isIntersect) {
+    const set<Symbol> alphabet = commonAlphabet<NFA>(nfa1, nfa2);
+    const DFA dfa1 = makeFull(determinize(nfa1), alphabet);
+    const DFA dfa2 = makeFull(determinize(nfa2), alphabet);
+    return minimize(parallelRun(dfa1, dfa2, isIntersect));
+}
+
+DFA unify    (const NFA& a, const NFA& b) { return handleProgtest(a, b, false); }
+DFA intersect(const NFA& a, const NFA& b) { return handleProgtest(a, b, true ); }
 
 #ifndef __PROGTEST__
 
@@ -290,15 +480,15 @@ bool operator==(const DFA& a, const DFA& b) {
     return std::tie(a.m_States, a.m_Alphabet, a.m_Transitions, a.m_InitialState, a.m_FinalStates) == std::tie(b.m_States, b.m_Alphabet, b.m_Transitions, b.m_InitialState, b.m_FinalStates);
 }
 
-int tests();
+void tests();
 
 int main(void) {
 
-    // tests();
+    tests();
     return 0;
 }
 
-/*int tests() {
+void tests() {
     NFA a1{
         {0, 1, 2},
         {'a', 'b'},
@@ -322,6 +512,16 @@ int main(void) {
         0,
         {2},
     };
+    printCommon(makeFull(determinize(a1), a1.m_Alphabet));
+    cout << "-------------------" << endl;
+    printCommon(makeFull(determinize(a2), a2.m_Alphabet));
+    cout << "-------------------" << endl;
+    printCommon(intersect(a1, a2));
+    cout << "-------------------" << endl;
+    printCommon(unify(a1, a2));
+    cout << "-------------------" << endl;
+    printCommon(intersect(a1, a2));
+    return;
     DFA a{
         {0, 1, 2, 3, 4},
         {'a', 'b'},
@@ -471,5 +671,5 @@ int main(void) {
         {1, 2, 3},
     };
     assert(intersect(d1, d2) == d);
-}*/
+}
 #endif
