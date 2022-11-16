@@ -110,6 +110,42 @@ bool checkIntersect(const set<S>& s1, const set<S>& s2) {
     return false;
 }
 
+// --- Full automat -----------------------------------------------------------
+
+DFA makeFull(const DFA& dfa) {
+    const State failState = dfa.m_States.size(); // last item + 1
+    map<Config, State> transitions = dfa.m_Transitions;
+    
+    // exploiting that states are indexed from 0 to len - 1
+    for (size_t state = 0; state < failState; ++state) {
+        for (const Symbol symbol : dfa.m_Alphabet) {
+            const Config config = {state, symbol};
+            if (transitions.find(config) == transitions.end()) {
+                transitions.emplace(make_pair(config, failState));
+            }
+        }
+    }
+
+    // add transitions for the final state
+    for (const Symbol symbol : dfa.m_Alphabet) {
+        const Config config = {failState, symbol};
+        transitions.emplace(make_pair(config, failState));
+    }
+
+    SetState newStates = dfa.m_States;
+    newStates.emplace(failState);
+
+    return DFA{
+        newStates,
+        dfa.m_Alphabet,
+        transitions,
+        dfa.m_InitialState,
+        dfa.m_FinalStates
+    };
+}
+
+// --- Determinization --------------------------------------------------------
+
 map<SetConfig, SetState> determinizeTransitions(const NFA& nfa) {
     map<SetConfig, SetState> createdTransitions;
 
