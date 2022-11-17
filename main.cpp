@@ -48,45 +48,62 @@ struct DFA {
 
 // --- Printing ---------------------------------------------------------------
 template<typename T1, typename T2>
-ostream& operator<<(ostream& out, const pair<T1, T2>& pair);
+ostream& operator<<(ostream& out, const pair<T1, T2>& data);
 template<typename... T>
-ostream& operator<<(ostream& out, const tuple<T...>& tuple);
+ostream& operator<<(ostream& out, const tuple<T...>& data);
 template<typename T>
-ostream& operator<<(ostream& out, const set<T>& set);
+ostream& operator<<(ostream& out, const vector<T>& data);
+template<typename T>
+ostream& operator<<(ostream& out, const set<T>& data);
 template<typename T1, typename T2>
-ostream& operator<<(ostream& out, const map<T1, T2>& map);
+ostream& operator<<(ostream& out, const map<T1, T2>& data);
 
 template<typename T1, typename T2>
-ostream& operator<<(ostream& out, const pair<T1, T2>& pair) {
-    return out << "<" << pair.first << " " << pair.second << ">";
+ostream& operator<<(ostream& out, const pair<T1, T2>& data) {
+    return out << "<" << data.first << " " << data.second << ">";
+}
+
+template<size_t I = 0, typename... Tp>
+void tuplePrintImpl(ostream& out, const tuple<Tp...>& t) {
+    if constexpr (I != 0) out << " ";
+    out << get<I>(t);
+
+    if constexpr(I+1 != sizeof...(Tp))
+        tuplePrintImpl<I+1>(out, t);
 }
 
 template<typename... T>
-ostream& operator<<(ostream& out, const tuple<T...>& tuple) {
-    return out << "<";
-    bool isFirst = true;
-    apply([&out, &isFirst](auto&&... args) {
-            if (isFirst) isFirst = false;
-            else out << " ";
-
-            ((out << args), ...);
-            }, tuple);
+ostream& operator<<(ostream& out, const tuple<T...>& data) {
+    out << "<";
+    tuplePrintImpl(out, data);
     return out << ">";
 }
 
 template<typename T>
-ostream& operator<<(ostream& out, const set<T>& set) {
+ostream& operator<<(ostream& out, const vector<T>& data) {
+    out << "(";
+    bool isFirst = true;
+    for (const auto& item: data) {
+        if (isFirst) isFirst = false;
+        else out << " ";
+        out << item;
+    }
+    return out << ")";
+}
+
+template<typename T>
+ostream& operator<<(ostream& out, const set<T>& data) {
     out << "[";
-    for (const auto& item: set)
-        out << (item == *set.begin() ? "" : " ") << item;
+    for (const auto& item: data)
+        out << (item == *data.begin() ? "" : " ") << item;
     return out << "]";
 }
 
 template<typename T1, typename T2>
-ostream& operator<<(ostream& out, const map<T1, T2>& map) {
+ostream& operator<<(ostream& out, const map<T1, T2>& data) {
     out << "{";
-    for (const auto& item: map)
-        out << (item == *map.begin() ? "" : " ")
+    for (const auto& item: data)
+        out << (item == *data.begin() ? "" : " ")
             << "(" << item.first << " " << item.second << ")";
     return out << "}";
 }
@@ -176,7 +193,6 @@ DFA commonApplyNaming(
         newStates.emplace(i);
 
     map<Config, State> newTransitions;
-    set<State> newFinite;
 
     for (const auto& transition : transitions) {
         const auto& [setConfig, dest] = transition;
@@ -192,11 +208,11 @@ DFA commonApplyNaming(
 
         // add to the final result
         newTransitions.emplace(make_pair(key, value));
-
-        // checks if the state is final
-        if (dfa.m_FinalStates.count(state))
-            newFinite.emplace(name);
     }
+
+    set<State> newFinite;
+    for (const State fin : dfa.m_FinalStates)
+        newFinite.emplace(nameMaping.at(fin));
 
     const DFA output = {
         newStates,
@@ -211,21 +227,7 @@ DFA commonApplyNaming(
 
 DFA commonNaming(const DFA& dfa) {
     const map<State, State> nameMaping = nameStates(dfa.m_InitialState, dfa.m_Transitions);
-    cout << "map: " << nameMaping << endl;
     return commonApplyNaming(dfa, dfa.m_Transitions, nameMaping);
-}
-
-void print(const DFA& dfa, ostream& out = cout) {
-    out <<
-        dfa.m_States << "\n" <<
-        dfa.m_Alphabet << "\n" <<
-        dfa.m_Transitions << "\n" <<
-        dfa.m_InitialState << "\n" <<
-        dfa.m_FinalStates << endl;
-}
-void printCommon(const DFA& dfa, ostream& out = cout) {
-    const DFA aut = commonNaming(dfa);
-    print(aut);
 }
 
 
@@ -275,9 +277,17 @@ DFA minimizeRemoveUseless(const DFA& dfa) {
             }
         }
     }
+
+    map<Config, State> newTransitions;
+    for (const auto& [config, target] : dfa.m_Transitions) {
+        if (useful.count(config.first) != 0 && useful.count(target) != 0 )
+            newTransitions.emplace(make_pair(config, target));
+    }
+
     useful.emplace(dfa.m_InitialState);
+
     return DFA {
-        useful, dfa.m_Alphabet, dfa.m_Transitions, dfa.m_InitialState, dfa.m_FinalStates
+        useful, dfa.m_Alphabet, newTransitions, dfa.m_InitialState, dfa.m_FinalStates
     };
 }
 
@@ -292,7 +302,7 @@ map<State, Group> minimizeCreateInitialLookup(const DFA& dfa) {
     map<State, Group> lookup;
 
     for (const State state : states) {
-        const Group group = fin.count(state) == 0;
+        const Group group = fin.count(state) != 0;
         lookup.emplace(make_pair(state, group));
     }
 
@@ -329,7 +339,8 @@ set<CheckingResult> minimizeFillInTrans(const DFA& dfa, const map<State, Group>&
 
     for (const State state : states) {
         const Group group = lookup.at(state);
-        vector<Group> mappedTrans(alphabet.size());
+        vector<Group> mappedTrans;
+        mappedTrans.reserve(alphabet.size());
 
         for (const Symbol symbol : alphabet) {
             const Config key = {state, symbol};
@@ -354,7 +365,7 @@ DFA minimizeToAutomate(const DFA& dfa, const set<CheckingResult>& current) {
     set<State> newStates;
     map<Config, State> newTrans;
     set<State> newFin;
-    State newInitial;
+    State newInitial = (State) -1;
 
     for (const auto& res : current) {
         const auto& [group, children, state] = res;
@@ -372,7 +383,7 @@ DFA minimizeToAutomate(const DFA& dfa, const set<CheckingResult>& current) {
         if (fin.count(state) != 0)
             newFin.emplace(group);
         if (dfa.m_InitialState == state)
-            newInitial = dfa.m_InitialState;
+            newInitial = group;
     }
 
     return DFA {
@@ -389,6 +400,7 @@ DFA minimizeEquiv(const DFA& dfa) {
         prevState = minimizeFillInTrans(dfa, lookup);
     }
 
+
     while(true) {
         const map<State, Group> lookup = minimizeCreateDerivedLookup(dfa, prevState);
         currentState = minimizeFillInTrans(dfa, lookup);
@@ -403,8 +415,7 @@ DFA minimizeEquiv(const DFA& dfa) {
 DFA minimize(const DFA& dfa) {
     // removeUnreachable - removed by prev algorithms
     const DFA& ready = minimizeRemoveUseless(dfa);
-
-    return dfa;
+    return minimizeEquiv(ready);
 }
 
 
@@ -451,6 +462,23 @@ map<DoubleConfig, DoubleState> parallelRunTransitions(const DFA& dfa1, const DFA
     return transitions;
 }
 
+bool parallelRunAddInFinal(
+        const DFA& dfa1,
+        const DFA& dfa2,
+        const DoubleState& state,
+        const bool isIntersect
+        ) {
+    const set<State>& fin1 = dfa1.m_FinalStates;
+    const set<State>& fin2 = dfa2.m_FinalStates;
+
+    // checks if the state is final
+    if (isIntersect) {
+        return (fin1.count(get<0>(state)) && fin2.count(get<1>(state)));
+    } else {
+        return (fin1.count(get<0>(state)) || fin2.count(get<1>(state)));
+    }
+}
+
 /**
  * Renames nodes according to the previously generated mapping 
  * and creates the finite notes set. Puts it all into the final DFA */
@@ -461,8 +489,6 @@ DFA parallelRunApplyNaming(
         const map<DoubleState, State>& nameMaping,
         const bool isIntersect
         ) {
-    const set<State>& fin1 = dfa1.m_FinalStates;
-    const set<State>& fin2 = dfa2.m_FinalStates;
 
     // states are just integers in [0, n>
     set<State> newStates = {0}; // the initial state must be always presented
@@ -471,6 +497,13 @@ DFA parallelRunApplyNaming(
 
     map<Config, State> newTransitions;
     set<State> newFinite;
+
+    // make sure initial state is always present
+    {
+        const DoubleState initial = {dfa1.m_InitialState, dfa2.m_InitialState};
+        if (parallelRunAddInFinal(dfa1, dfa2, initial, isIntersect))
+            newFinite.emplace(nameMaping.at(initial));
+    }
 
     for (const auto& transition : transitions) {
         const auto& [setConfig, dest] = transition;
@@ -484,14 +517,10 @@ DFA parallelRunApplyNaming(
         // add to the final result
         newTransitions.emplace(make_pair(key, value));
 
-        // checks if the state is final
-        if (isIntersect) {
-            if (fin1.count(get<0>(state)) && fin2.count(get<1>(state)) )
-                newFinite.emplace(name);
-        } else {
-            if (fin1.count(get<0>(state)) || fin2.count(get<1>(state)) )
-                newFinite.emplace(name);
-        }
+        if (parallelRunAddInFinal(dfa1, dfa2, state, isIntersect))
+            newFinite.emplace(name);
+        if (parallelRunAddInFinal(dfa1, dfa2, dest, isIntersect))
+            newFinite.emplace(value);
     }
 
     const DFA output = {
@@ -547,6 +576,10 @@ DFA makeFull(const DFA& dfa, const set<Symbol>& alphabet) {
         dfa.m_InitialState,
         dfa.m_FinalStates
     };
+}
+
+DFA makeFull(const DFA& dfa) {
+    return makeFull(dfa, dfa.m_Alphabet);
 }
 
 // --- Determinization --------------------------------------------------------
@@ -617,6 +650,13 @@ DFA determinizeApplyNaming(
     map<Config, State> newTransitions;
     set<State> newFinite;
 
+    // make sure initial state is always present
+    {
+        const SetState initial = {nfa.m_InitialState};
+        if (checkIntersect(initial, nfa.m_FinalStates))
+            newFinite.emplace(nameMaping.at(initial));
+    }
+
     for (const auto& transition : transitions) {
         const auto& [setConfig, dest] = transition;
         const auto [state, symbol] = setConfig;
@@ -632,6 +672,8 @@ DFA determinizeApplyNaming(
         // checks if the state is final
         if (checkIntersect(state, nfa.m_FinalStates))
             newFinite.emplace(name);
+        if (checkIntersect(dest, nfa.m_FinalStates))
+            newFinite.emplace(value);
     }
 
     const DFA output = {
@@ -672,12 +714,75 @@ bool operator==(const DFA& a, const DFA& b) {
 void tests();
 
 int main(void) {
-
     tests();
     return 0;
 }
 
-void tests() {
+void separator(const string& str, ostream& out = cout) {
+    out << "--- " << str << " ";
+    for (ssize_t i = 0; i < 80 - 5 - (ssize_t) str.length(); ++i)
+        out << "-";
+    out << endl;
+}
+
+void print(const DFA& dfa, ostream& out = cout) {
+    out <<
+        dfa.m_States << "\n" <<
+        dfa.m_Alphabet << "\n" <<
+        dfa.m_Transitions << "\n" <<
+        dfa.m_InitialState << "\n" <<
+        dfa.m_FinalStates << endl;
+}
+
+void printCommon(const DFA& dfa, ostream& out = cout) {
+    const DFA aut = commonNaming(dfa);
+    print(aut);
+}
+
+void printDeterminization(const NFA& nfa1, const NFA& nfa2, const DFA& dfa) {
+    const DFA d1 = determinize(nfa1);
+    const DFA f1 = makeFull(d1);
+    const DFA d2 = determinize(nfa2);
+    const DFA f2 = makeFull(d2);
+    const DFA in = parallelRun(f1, f2, true);
+    const DFA un = parallelRun(f1, f2, false);
+    const DFA us = minimizeRemoveUseless(in);
+    const DFA mn = minimize(in);
+
+    separator("A1");
+    print(d1);
+
+    separator("A1 complete");
+    print(f1);
+
+    separator("A2");
+    print(d2);
+
+    separator("A2 complete");
+    print(f2);
+
+    separator("Intersect ");
+    print(in);
+
+    separator("Union ");
+    print(un);
+
+    separator("Useless ");
+    printCommon(us);
+
+    separator("Minimal");
+    print(mn);
+
+    separator("Minimal common");
+    printCommon(mn);
+
+    separator("Reference");
+    printCommon(dfa);
+}
+
+void testA() {
+    separator("TEST A");
+
     NFA a1{
         {0, 1, 2},
         {'a', 'b'},
@@ -718,23 +823,15 @@ void tests() {
         {2},
     };
 
-    print(a);
-    cout << "-------------------" << endl;
-    print(commonNaming(a));
+    printDeterminization(a1, a2, a);
     assert(commonNaming(a) == a);
-
-    printCommon(makeFull(determinize(a1), a1.m_Alphabet));
-    cout << "-------------------" << endl;
-    printCommon(makeFull(determinize(a2), a2.m_Alphabet));
-    cout << "-------------------" << endl;
-    printCommon(intersect(a1, a2));
-    cout << "-------------------" << endl;
-    printCommon(unify(a1, a2));
-    cout << "-------------------" << endl;
-    printCommon(intersect(a1, a2));
-
     assert(commonNaming(intersect(a1, a2)) == a);
-    return;
+
+    cout << "\n\n\n" << flush;
+}
+
+void testB() {
+    separator("TEST B");
 
     NFA b1{
         {0, 1, 2, 3, 4},
@@ -787,7 +884,16 @@ void tests() {
         0,
         {1, 5, 8},
     };
-    assert(unify(b1, b2) == b);
+
+    printDeterminization(b1, b2, b);
+
+    assert(commonNaming(b) == b);
+    assert(commonNaming(unify(b1, b2)) == b);
+    cout << "\n\n\n" << flush;
+}
+
+void testC() {
+    separator("TEST C");
 
     NFA c1{
         {0, 1, 2, 3, 4},
@@ -820,7 +926,17 @@ void tests() {
         0,
         {},
     };
-    assert(intersect(c1, c2) == c);
+
+    printDeterminization(c1, c2, c);
+
+    assert(commonNaming(c) == c);
+    assert(commonNaming(intersect(c1, c2)) == c);
+
+    cout << "\n\n\n" << flush;
+}
+
+void testD() {
+    separator("TEST D");
 
     NFA d1{
         {0, 1, 2, 3},
@@ -866,6 +982,19 @@ void tests() {
         0,
         {1, 2, 3},
     };
-    assert(intersect(d1, d2) == d);
+
+    printDeterminization(d1, d2, d);
+
+    assert(commonNaming(d) == d);
+    assert(commonNaming(intersect(d1, d2)) == d);
+
+    cout << "\n\n\n" << flush;
+}
+
+void tests() {
+    testA();
+    testB();
+    testC();
+    testD();
 }
 #endif
