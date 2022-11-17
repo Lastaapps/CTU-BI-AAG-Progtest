@@ -49,6 +49,8 @@ struct DFA {
 // --- Printing ---------------------------------------------------------------
 template<typename T1, typename T2>
 ostream& operator<<(ostream& out, const pair<T1, T2>& pair);
+template<typename... T>
+ostream& operator<<(ostream& out, const tuple<T...>& tuple);
 template<typename T>
 ostream& operator<<(ostream& out, const set<T>& set);
 template<typename T1, typename T2>
@@ -57,6 +59,19 @@ ostream& operator<<(ostream& out, const map<T1, T2>& map);
 template<typename T1, typename T2>
 ostream& operator<<(ostream& out, const pair<T1, T2>& pair) {
     return out << "<" << pair.first << " " << pair.second << ">";
+}
+
+template<typename... T>
+ostream& operator<<(ostream& out, const tuple<T...>& tuple) {
+    return out << "<";
+    bool isFirst = true;
+    apply([&out, &isFirst](auto&&... args) {
+            if (isFirst) isFirst = false;
+            else out << " ";
+
+            ((out << args), ...);
+            }, tuple);
+    return out << ">";
 }
 
 template<typename T>
@@ -119,6 +134,7 @@ map<FromState, State> nameStates(
 
     // starts at 0
     State nextStateName = 0;
+
     set<FromState> visited = {initial};
     queue<FromState> queue;
     queue.push(initial);
@@ -136,7 +152,7 @@ map<FromState, State> nameStates(
         for (; itr != transitions.end() && get<0>(itr -> first) == state; ++itr) {
             const FromState& targets = itr -> second;
             if (visited.find(targets) == visited.end()) {
-                visited.emplace(state);
+                visited.emplace(targets);
                 queue.emplace(targets);
             }
         }
@@ -195,6 +211,7 @@ DFA commonApplyNaming(
 
 DFA commonNaming(const DFA& dfa) {
     const map<State, State> nameMaping = nameStates(dfa.m_InitialState, dfa.m_Transitions);
+    cout << "map: " << nameMaping << endl;
     return commonApplyNaming(dfa, dfa.m_Transitions, nameMaping);
 }
 
@@ -214,7 +231,179 @@ void printCommon(const DFA& dfa, ostream& out = cout) {
 
 // --- Minimization -----------------------------------------------------------
 
+DFA minimizeRemoveUseless(const DFA& dfa) {
+    const map<Config, State>& trans = dfa.m_Transitions;
+
+    map<State, set<State>> tracking;
+    {
+        queue<State> queue;
+        queue.push(dfa.m_InitialState);
+        set<State> visited;
+
+        while(!queue.empty()) {
+            const State state = queue.front();
+            queue.pop();
+
+            auto itr = trans.lower_bound({state, 0});
+
+            for (; itr != trans.end() && get<0>(itr -> first) == state; ++itr) {
+                const State target = itr -> second;
+                tracking[target].emplace(state);
+
+                if (visited.count(target) == 0) {
+                    visited.emplace(target);
+                    queue.push(target);
+                }
+            }
+        }
+    }
+    set<State> useful = dfa.m_FinalStates;
+    {
+        queue<State> queue;
+        for (const State fin : dfa.m_FinalStates)
+            queue.push(fin);
+
+        while(!queue.empty()) {
+            const State state = queue.front();
+            queue.pop();
+
+            for (const State parent : tracking[state]) {
+                if (useful.count(parent) == 0) {
+                    useful.emplace(parent);
+                    queue.push(parent);
+                }
+            }
+        }
+    }
+    useful.emplace(dfa.m_InitialState);
+    return DFA {
+        useful, dfa.m_Alphabet, dfa.m_Transitions, dfa.m_InitialState, dfa.m_FinalStates
+    };
+}
+
+using Group = State;
+using CheckingResult = tuple<Group, vector<Group>, State>;
+const State emptyGroup = (State) -1;
+
+map<State, Group> minimizeCreateInitialLookup(const DFA& dfa) {
+    const set<State>& states = dfa.m_States;
+    const set<State>& fin = dfa.m_FinalStates;
+
+    map<State, Group> lookup;
+
+    for (const State state : states) {
+        const Group group = fin.count(state) == 0;
+        lookup.emplace(make_pair(state, group));
+    }
+
+    return lookup;
+}
+
+map<State, Group> minimizeCreateDerivedLookup(const DFA& dfa, const set<CheckingResult>& prev) {
+    map<State, Group> lookup;
+    Group nameCounter = 0;
+
+    if (prev.empty()) return lookup;
+    // insert the first row
+    lookup.emplace(make_pair(get<2>(*prev.begin()), nameCounter));
+
+    for (auto itr = ++prev.begin(), itrPrev = prev.begin(); itr != prev.end(); ++itr, ++itrPrev) {
+        const State state = get<2>(*itr);
+        if (get<0>(*itr) == get<0>(*itrPrev) &&
+                get<1>(*itr) == get<1>(*itrPrev)) {
+            lookup.emplace(make_pair(state, nameCounter));
+        } else {
+            lookup.emplace(make_pair(state, ++nameCounter));
+        }
+    }
+
+    return lookup;
+}
+
+set<CheckingResult> minimizeFillInTrans(const DFA& dfa, const map<State, Group>& lookup) {
+    const set<Symbol>& alphabet = dfa.m_Alphabet;
+    const set<State>& states = dfa.m_States;
+    const map<Config, State>& trans = dfa.m_Transitions;
+
+    set<CheckingResult> result;
+
+    for (const State state : states) {
+        const Group group = lookup.at(state);
+        vector<Group> mappedTrans(alphabet.size());
+
+        for (const Symbol symbol : alphabet) {
+            const Config key = {state, symbol};
+            const auto res = trans.find(key);
+
+            if (res != trans.end() && states.count(res -> second) != 0) {
+                mappedTrans.emplace_back(lookup.at(res -> second));
+            } else {
+                mappedTrans.emplace_back(emptyGroup);
+            }
+        }
+
+        result.emplace(CheckingResult{group, mappedTrans, state});
+    }
+    return result;
+}
+
+DFA minimizeToAutomate(const DFA& dfa, const set<CheckingResult>& current) {
+    const set<Symbol>& alphabet = dfa.m_Alphabet;
+    const set<State>& fin = dfa.m_FinalStates;
+
+    set<State> newStates;
+    map<Config, State> newTrans;
+    set<State> newFin;
+    State newInitial;
+
+    for (const auto& res : current) {
+        const auto& [group, children, state] = res;
+        newStates.emplace(group);
+
+        auto alpItr = alphabet.begin();
+        auto chItr = children.begin();
+
+        for (; alpItr != alphabet.end(); ++alpItr, ++chItr) {
+            const Group& child = *chItr;
+            if (child != emptyGroup)
+                newTrans.emplace(make_pair(Config{group, *alpItr}, child));
+        }
+
+        if (fin.count(state) != 0)
+            newFin.emplace(group);
+        if (dfa.m_InitialState == state)
+            newInitial = dfa.m_InitialState;
+    }
+
+    return DFA {
+        newStates, dfa.m_Alphabet, newTrans, newInitial, newFin
+    };
+}
+
+DFA minimizeEquiv(const DFA& dfa) {
+
+    set<CheckingResult> prevState;
+    set<CheckingResult> currentState;
+    {
+        const map<State, Group> lookup = minimizeCreateInitialLookup(dfa);
+        prevState = minimizeFillInTrans(dfa, lookup);
+    }
+
+    while(true) {
+        const map<State, Group> lookup = minimizeCreateDerivedLookup(dfa, prevState);
+        currentState = minimizeFillInTrans(dfa, lookup);
+
+        if (currentState == prevState) break;
+        swap(currentState, prevState);
+    }
+
+    return minimizeToAutomate(dfa, currentState);
+}
+
 DFA minimize(const DFA& dfa) {
+    // removeUnreachable - removed by prev algorithms
+    const DFA& ready = minimizeRemoveUseless(dfa);
+
     return dfa;
 }
 
@@ -512,16 +701,6 @@ void tests() {
         0,
         {2},
     };
-    printCommon(makeFull(determinize(a1), a1.m_Alphabet));
-    cout << "-------------------" << endl;
-    printCommon(makeFull(determinize(a2), a2.m_Alphabet));
-    cout << "-------------------" << endl;
-    printCommon(intersect(a1, a2));
-    cout << "-------------------" << endl;
-    printCommon(unify(a1, a2));
-    cout << "-------------------" << endl;
-    printCommon(intersect(a1, a2));
-    return;
     DFA a{
         {0, 1, 2, 3, 4},
         {'a', 'b'},
@@ -538,7 +717,24 @@ void tests() {
         0,
         {2},
     };
-    assert(intersect(a1, a2) == a);
+
+    print(a);
+    cout << "-------------------" << endl;
+    print(commonNaming(a));
+    assert(commonNaming(a) == a);
+
+    printCommon(makeFull(determinize(a1), a1.m_Alphabet));
+    cout << "-------------------" << endl;
+    printCommon(makeFull(determinize(a2), a2.m_Alphabet));
+    cout << "-------------------" << endl;
+    printCommon(intersect(a1, a2));
+    cout << "-------------------" << endl;
+    printCommon(unify(a1, a2));
+    cout << "-------------------" << endl;
+    printCommon(intersect(a1, a2));
+
+    assert(commonNaming(intersect(a1, a2)) == a);
+    return;
 
     NFA b1{
         {0, 1, 2, 3, 4},
